@@ -462,8 +462,21 @@ def assemble_zip(inputs,
         if os.path.exists(review_status_file_path):
             files_to_compress[os.path.dirname(review_status_file_path)]\
                 .add(review_status_file_path)
+        
+        report_datas_dir = os.path.dirname(os.path.dirname(dir_path))
+        metrics_path = os.path.join(report_datas_dir, "metrics")
 
-    LOG.debug(f"Processing {len(analyzer_result_file_paths)} report files ...")
+        if os.path.isdir(metrics_path):
+            for file_name in os.listdir(metrics_path):
+                if file_name.endswith('.yaml') and file_name.startswith('metric'):
+                    yaml_file_path = os.path.join(metrics_path, file_name)
+                    files_to_compress.setdefault(metrics_path, set()).add(yaml_file_path)
+                    metrics_found = True
+
+    if not metrics_found:
+        LOG.warning("No metric YAML files found in any metrics directory")
+        
+        LOG.debug(f"Processing {len(analyzer_result_file_paths)} report files ...")
 
     with Pool() as executor:
         analyzer_result_file_reports = parse_analyzer_result_files(
@@ -572,11 +585,14 @@ def assemble_zip(inputs,
             for file_path in files:
                 _, file_name = os.path.split(file_path)
 
-                # Create a unique report directory name.
-                report_dir_name = \
-                    hashlib.md5(dirname.encode('utf-8')).hexdigest()
-                zip_target = \
-                    os.path.join('reports', report_dir_name, file_name)
+                if os.path.basename(dirname) == "metrics":
+                    zip_target = os.path.join('metrics', file_name)
+                else:
+                    # Create a unique report directory name.
+                    report_dir_name = \
+                        hashlib.md5(dirname.encode('utf-8')).hexdigest()
+                    zip_target = \
+                        os.path.join('reports', report_dir_name, file_name)
                 zipf.write(file_path, zip_target)
 
         collected_file_paths = set()

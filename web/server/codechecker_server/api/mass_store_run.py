@@ -14,6 +14,7 @@ import tempfile
 import time
 import zipfile
 import zlib
+import yaml
 
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -45,7 +46,7 @@ from ..database.run_db_model import \
     ExtendedReportData, \
     File, FileContent, \
     Report as DBReport, ReportAnnotations, ReviewStatus as ReviewStatusRule, \
-    Run, RunLock, RunHistory
+    Run, RunLock, RunHistory, Metric, MetricType
 from ..metadata import checker_is_unavailable, MetadataInfoParser
 
 from .report_annotations import report_annotation_types
@@ -837,7 +838,7 @@ class MassStoreRun:
             session.flush()
             LOG.debug("Storing analysis statistics done.")
 
-            return run_id, update_run
+            return run_id, run_history.id, update_run
         except Exception as ex:
             raise codechecker_api_shared.ttypes.RequestFailed(
                 codechecker_api_shared.ttypes.ErrorCode.GENERAL,
@@ -865,6 +866,52 @@ class MassStoreRun:
                              report: Report) -> Optional[Checker]:
         analyzer_name, checker_name = checker_name_for_report(report)
         return self.__get_checker(session, analyzer_name, checker_name)
+    
+    def __store_metrics(self,
+                    session: DBSession,
+                    metric_dir: str,
+                    run_history_id: int):
+
+        for file in os.listdir(metric_dir):
+            if file.endswith(".yaml"):
+                full_path = os.path.join(metric_dir, file)
+                with open(full_path, "r", encoding="utf-8") as yaml_file:
+                    metric_data = yaml.safe_load(yaml_file)
+
+                    metric_type_name = metric_data.get("metric_type")
+                    metric_description = metric_data.get("metric_description")
+                    aggregation_method = metric_data.get("aggregation_method")
+                    results = metric_data.get("results")
+
+                    existing_type = session.query(MetricType).filter(
+                        MetricType.metric_type_name == metric_type_name
+                    ).one_or_none()
+
+                    if existing_type is None:
+                        metric_type = MetricType(
+                            metric_type_name = metric_type_name,
+                            description = metric_description,
+                            aggregate_method = aggregation_method,
+                        )
+                        session.add(metric_type)
+                        session.flush()
+                        metric_type_id = metric_type.id
+                    else:
+                        metric_type_id = existing_type.id
+
+                    for item in results:
+                        file_path = item.get("file_path")
+                        metric_value = item.get("metric_value")
+                        
+                        metrics = Metric(
+                            file_path = file_path,
+                            metric_value = metric_value,
+                            run_history_id = run_history_id,
+                            metric_type_id = metric_type_id
+                        )
+
+                        session.add(metrics)
+
 
     def __add_report(
         self,
@@ -1419,6 +1466,7 @@ class MassStoreRun:
                 source_root = os.path.join(zip_dir, 'root')
                 blame_root = os.path.join(zip_dir, 'blame')
                 report_dir = os.path.join(zip_dir, 'reports')
+                metric_dir = os.path.join(zip_dir, 'metrics')
                 content_hash_file = os.path.join(
                     zip_dir, 'content_hashes.json')
 
@@ -1460,8 +1508,9 @@ class MassStoreRun:
                     # run data into the database.
                     with DBSession(self.__report_server._Session) as session, \
                             RunLocking(session, self.__name):
+                        
                         # Actual store operation begins here.
-                        run_id, update_run = self.__add_or_update_run(
+                        run_id, run_history_id, update_run = self.__add_or_update_run(
                             session, run_history_time)
 
                         with LogTask(run_name=self.__name,
@@ -1469,6 +1518,10 @@ class MassStoreRun:
                             self.__store_reports(
                                 session, report_dir, source_root, run_id,
                                 file_path_to_id, run_history_time)
+                            
+                        with LogTask(run_name=self.__name,
+                            message="Store metrics"):
+                            self.__store_metrics(session, metric_dir, run_history_id)
 
                         session.commit()
                         self.__load_report_ids_for_reports_with_fake_checkers(

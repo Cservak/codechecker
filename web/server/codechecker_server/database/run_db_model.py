@@ -189,6 +189,43 @@ RunHistoryAnalysisInfo = Table(
     Column('analysis_info_id', Integer, ForeignKey('analysis_info.id'))
 )
 
+class Metric(Base):
+    __tablename__ = 'metrics'
+
+    id = Column(Integer, autoincrement=True, primary_key=True)
+    file_path = Column(String, nullable=False)
+    run_history_id = Column(Integer, ForeignKey('run_histories.id'), 
+                                                nullable=False)
+    
+    metric_type_id = Column(Integer, ForeignKey('metric_types.id'),
+                                                nullable=False)
+    metric_value = Column(Integer, nullable=False)
+
+    metric_type = relationship("MetricType", back_populates="metrics")
+    run_history = relationship("RunHistory", back_populates="metrics")
+
+    def __init__(self, file_path: str, run_history_id: int, 
+                 metric_type_id: int, metric_value: int):
+        self.file_path = file_path
+        self.run_history_id = run_history_id
+        self.metric_type_id = metric_type_id
+        self.metric_value = metric_value
+    
+class MetricType(Base):
+    __tablename__ = 'metric_types'
+
+    id = Column(Integer, autoincrement=True, primary_key=True)
+    metric_type_name = Column(String, nullable=False)
+    description = Column(String, nullable=False)
+    aggregate_method = Column(String, nullable=False)
+
+    metrics = relationship("Metric", back_populates="metric_type")
+
+    def __init__(self, metric_type_name: str, description: str,
+                aggregate_method: str):
+        self.metric_type_name = metric_type_name
+        self.description = description
+        self.aggregate_method = aggregate_method
 
 class RunHistory(Base):
     __tablename__ = 'run_histories'
@@ -207,6 +244,8 @@ class RunHistory(Base):
     run = relationship(Run, uselist=False)
     analyzer_statistics = relationship(AnalyzerStatistic,
                                        lazy="joined")
+    
+    metrics = relationship("Metric", back_populates="run_history")
 
     analysis_info = relationship(
         "AnalysisInfo",
